@@ -1,0 +1,266 @@
+create database market9;
+go
+use market9;
+go 
+create table kategori(
+kategoriID int primary key,
+kategori_Adi varchar(20));
+create table tedarikci(
+tedarikciID int primary key,
+tedarikci_adi varchar(20),
+firma_Adi varchar(20),
+telefon int,
+adress varchar(50));
+create table urun(
+urunID int primary key,
+urun_adi varchar(20),
+kategoriID int,
+tedarikciID int);
+create table stok (
+StokID INT PRIMARY KEY,
+UrunID INT,
+Miktar INT,
+Kritik_Seviye INT);
+CREATE TABLE MUSTERI (
+MusteriID INT PRIMARY KEY,
+Ad VARCHAR(100),
+Soyad VARCHAR(100),
+Telefon VARCHAR(20));
+CREATE TABLE KASIYER (
+KasiyerID INT PRIMARY KEY,
+Ad VARCHAR(100),
+Soyad VARCHAR(100));
+CREATE TABLE SATIS (
+SatisID INT PRIMARY KEY,
+SatisTarihi DATETIME DEFAULT GETDATE(),
+MusteriID INT,
+KasiyerID INT,
+Toplam_Tutar DECIMAL(10,2));
+CREATE TABLE SATIS_DETAY (
+DetayID INT  PRIMARY KEY,
+SatisID INT ,
+UrunID INT,
+Adet INT,
+BirimFiyat DECIMAL(10,2));
+
+
+
+
+
+
+CREATE TRIGGER trg_StokDusur
+ON SATIS_DETAY
+AFTER INSERT
+AS
+BEGIN
+    UPDATE S
+    SET Miktar = Miktar - i.Adet
+    FROM STOK S
+    JOIN inserted i ON S.UrunID = i.UrunID;
+
+    PRINT 'Stok güncellendi';
+END
+GO
+
+
+CREATE TRIGGER trg_ToplamHesapla
+ON SATIS_DETAY
+AFTER INSERT
+AS
+BEGIN
+    UPDATE SA
+    SET Toplam_Tutar = (
+        SELECT SUM(Adet * BirimFiyat)
+        FROM SATIS_DETAY SD
+        WHERE SD.SatisID = SA.SatisID
+    )
+    FROM SATIS SA
+    WHERE SA.SatisID IN (SELECT SatisID FROM inserted);
+
+    PRINT 'Toplam tutar hesaplandı';
+END
+GO
+
+
+CREATE TRIGGER trg_NegatifStok
+ON STOK
+AFTER UPDATE
+AS
+BEGIN
+    IF EXISTS (SELECT * FROM inserted WHERE Miktar < 0)
+        PRINT 'Uyarı: Negatif stok oluştu';
+END
+GO
+
+
+CREATE TRIGGER trg_UrunSilmeEngel
+ON URUN
+INSTEAD OF DELETE
+AS
+BEGIN
+    IF EXISTS (
+        SELECT *
+        FROM SATIS_DETAY sd
+        JOIN deleted d ON sd.UrunID = d.UrunID
+    )
+    BEGIN
+        PRINT 'Satışı olan ürün silinemez';
+    END
+    ELSE
+    BEGIN
+        DELETE FROM URUN
+        WHERE UrunID IN (SELECT UrunID FROM deleted);
+        PRINT 'Ürün silindi';
+    END
+END
+GO
+
+
+CREATE TRIGGER trg_SatisSil
+ON SATIS
+AFTER DELETE
+AS
+BEGIN
+    PRINT 'Satış silindi';
+END
+GO
+
+
+CREATE TRIGGER trg_KritikStok
+ON STOK
+AFTER UPDATE
+AS
+BEGIN
+    IF EXISTS (SELECT * FROM inserted WHERE Miktar <= Kritik_Seviye)
+        PRINT 'Uyarı: Kritik stok seviyesine ulaşıldı';
+END
+GO
+
+
+CREATE TRIGGER trg_TarihOto
+ON SATIS
+INSTEAD OF INSERT
+AS
+BEGIN
+    INSERT INTO SATIS (MusteriID, KasiyerID, SatisTarihi)
+    SELECT MusteriID, KasiyerID, GETDATE()
+    FROM inserted;
+
+    PRINT 'Satış tarihi otomatik atandı';
+END
+GO
+
+
+CREATE TRIGGER trg_SatisDetaySil
+ON SATIS_DETAY
+AFTER DELETE
+AS
+BEGIN
+    PRINT 'Satış detayı silindi';
+END
+GO
+
+
+CREATE TRIGGER trg_SatisDetayTekrar
+ON SATIS_DETAY
+AFTER INSERT
+AS
+BEGIN
+    IF EXISTS (
+        SELECT *
+        FROM SATIS_DETAY sd
+        JOIN inserted i 
+            ON sd.SatisID = i.SatisID
+           AND sd.UrunID = i.UrunID
+        WHERE sd.DetayID <> i.DetayID
+    )
+    BEGIN
+        PRINT 'Uyarı: Aynı satışa aynı ürün tekrar eklendi';
+    END
+END
+GO
+
+
+CREATE TRIGGER trg_AdetKontrol
+ON SATIS_DETAY
+AFTER INSERT
+AS
+BEGIN
+    IF EXISTS (SELECT * FROM inserted WHERE Adet <= 0)
+        PRINT 'Uyarı: Adet 0 veya negatif olamaz';
+END
+GO
+
+
+
+
+CREATE PROCEDURE sp_UrunEkle
+    @UrunAdi VARCHAR(150),
+    @Fiyat DECIMAL(10,2),
+    @KategoriID INT,
+    @TedarikciID INT
+AS
+INSERT INTO URUN VALUES (@UrunAdi,@Fiyat,@KategoriID,@TedarikciID);
+
+
+CREATE PROCEDURE sp_StokEkle
+    @UrunID INT,
+    @Miktar INT,
+    @Kritik_seviye INT
+AS
+INSERT INTO STOK(UrunID,Miktar,Kritik_Seviye)
+VALUES (@UrunID,@Miktar,@Kritik_seviye);
+
+
+CREATE PROCEDURE sp_SatisBaslat
+    @MusteriID INT,
+    @KasiyerID INT
+AS
+INSERT INTO SATIS (MusteriID,KasiyerID) VALUES (@MusteriID,@KasiyerID);
+
+
+
+CREATE PROCEDURE sp_SatisDetayEkle
+    @SatisID INT,
+    @UrunID INT,
+    @Adet INT
+AS
+INSERT INTO SATIS_DETAY (SatisID,UrunID,Adet)
+SELECT @SatisID,@UrunID,@Adet FROM URUN WHERE urunID=@UrunID;
+
+
+
+CREATE PROCEDURE sp_StokGuncelle
+    @UrunID INT,
+    @Miktar INT
+AS
+UPDATE STOK SET Miktar=@Miktar WHERE UrunID=@UrunID;
+
+
+
+CREATE PROCEDURE sp_GunlukSatis
+AS
+SELECT * FROM SATIS WHERE CAST(SatisTarihi AS DATE)=CAST(GETDATE() AS DATE);
+
+
+CREATE PROCEDURE sp_EnCokSatan
+AS
+SELECT UrunID,SUM(Adet) AS Toplam
+FROM SATIS_DETAY
+GROUP BY UrunID;
+
+CREATE PROCEDURE sp_KategoriListe
+AS
+SELECT * FROM kategori;
+
+
+CREATE PROCEDURE sp_StokDurum
+AS
+SELECT U.urun_adi,S.Miktar
+FROM STOK S
+JOIN URUN U ON S.UrunID=U.UrunID;
+
+CREATE PROCEDURE sp_ToplamCiro
+AS
+SELECT SUM(Toplam_Tutar)AS Ciro FROM SATIS;
+
